@@ -1,0 +1,189 @@
+services:
+  traefik:
+    image: traefik:v2.10
+    container_name: traefik
+    command:
+      - --api.dashboard=true
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=shiftpilot-network
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entrypoints.traefik.address=:8080
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - shiftpilot-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik.rule=Host(`traefik.localhost`)"
+      - "traefik.http.routers.traefik.service=api@internal"
+      - "traefik.http.routers.traefik.entrypoints=traefik"
+
+  mysql:
+    image: mysql:8.0
+    container_name: shiftpilot-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: shiftpilot
+      MYSQL_USER: shiftpilot
+      MYSQL_PASSWORD: password
+    volumes:
+      - mysql-data:/var/lib/mysql
+    networks:
+      - shiftpilot-network
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "mysqladmin",
+          "ping",
+          "-h",
+          "localhost",
+          "-uroot",
+          "-prootpassword",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:6.2-alpine
+    container_name: shiftpilot-redis
+    restart: unless-stopped
+    volumes:
+      - redis-data:/data
+    networks:
+      - shiftpilot-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  shiftpilot-api:
+    build:
+      context: ./shiftpilot-api # ← CORRECT: Matches your folder name
+      dockerfile: Dockerfile
+    container_name: shiftpilot-api
+    restart: unless-stopped
+    expose:
+      - "80"
+    volumes:
+      - ./shiftpilot-api:/var/www/html # ← CORRECT: Matches build context
+    environment:
+      APP_ENV: local
+      APP_URL: http://api.localhost
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_DATABASE: shiftpilot
+      DB_USERNAME: shiftpilot
+      DB_PASSWORD: password
+      REDIS_HOST: redis
+      SANCTUM_STATEFUL_DOMAINS: frontend.localhost
+      SESSION_DOMAIN: .localhost
+      MAIL_MAILER: smtp
+      MAIL_HOST: mailpit
+      MAIL_PORT: 1025
+      MAIL_USERNAME: null
+      MAIL_PASSWORD: null
+      MAIL_ENCRYPTION: null
+      MAIL_FROM_ADDRESS: noreply@shiftpilot.com
+      MAIL_FROM_NAME: shiftpilot
+    networks:
+      - shiftpilot-network
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api.rule=Host(`api.localhost`)"
+      - "traefik.http.routers.api.entrypoints=web"
+      - "traefik.http.services.api.loadbalancer.server.port=80"
+
+  shiftpilot-frontend:
+    build:
+      context: ./shiftpilot-frontend # ← CORRECT: Matches your folder name
+      dockerfile: Dockerfile
+    container_name: shiftpilot-frontend
+    restart: unless-stopped
+    expose:
+      - "3000"
+    volumes:
+      - ./shiftpilot-frontend:/app # ← CORRECT: Matches build context
+      - /app/node_modules
+    environment:
+      NODE_ENV: development
+      NEXT_PUBLIC_API_URL: http://api.localhost/api
+    networks:
+      - shiftpilot-network
+    depends_on:
+      - shiftpilot-api
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend.rule=Host(`frontend.localhost`)"
+      - "traefik.http.routers.frontend.entrypoints=web"
+      - "traefik.http.services.frontend.loadbalancer.server.port=3000"
+
+  mailpit:
+    image: axllent/mailpit
+    container_name: shiftpilot-mailpit
+    restart: unless-stopped
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    networks:
+      - shiftpilot-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.mailpit.rule=Host(`mailpit.localhost`)"
+      - "traefik.http.routers.mailpit.entrypoints=web"
+      - "traefik.http.services.mailpit.loadbalancer.server.port=8025"
+
+  phpmyadmin:
+    image: phpmyadmin:latest
+    container_name: shiftpilot-phpmyadmin
+    restart: unless-stopped
+    environment:
+      PMA_HOST: mysql
+      MYSQL_ROOT_PASSWORD: rootpassword
+    networks:
+      - shiftpilot-network
+    depends_on:
+      - mysql
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.phpmyadmin.rule=Host(`db.localhost`)"
+      - "traefik.http.routers.phpmyadmin.entrypoints=web"
+      - "traefik.http.services.phpmyadmin.loadbalancer.server.port=80"
+
+networks:
+  shiftpilot-network:
+    driver: bridge
+
+volumes:
+  mysql-data:
+    driver: local
+  redis-data:
+    driver: local
