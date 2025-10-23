@@ -1,0 +1,6 @@
+[submodule "shiftpilot-api"]
+	path = shiftpilot-api
+	url = git@github.com:your-org/shiftpilot-api.git
+[submodule "shiftpilot-frontend"]
+	path = shiftpilot-frontend
+	url = git@github.com:your-org/shiftpilot-frontend.git
